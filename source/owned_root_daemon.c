@@ -77,7 +77,8 @@ struct credentials {
     uid_t uid, ruid, svuid;
     gid_t rgid, svgid;
     uint32_t ngroups;
-    uint64_t authid, attrs;
+    uint64_t authid;
+    uint8_t attrs[32];
     uint8_t caps[16];
 };
 
@@ -489,8 +490,8 @@ static int save_credentials(pid_t pid, intptr_t ucred,
     out->rgid = kernel_get_ucred_rgid(pid);
     out->svgid = kernel_get_ucred_svgid(pid);
     out->authid = kernel_get_ucred_authid(pid);
-    out->attrs = kernel_get_ucred_attrs(pid);
-    return kernel_get_ucred_caps(pid, out->caps) ||
+    return kernel_get_ucred_attrs(pid, out->attrs) ||
+           kernel_get_ucred_caps(pid, out->caps) ||
            kernel_copyout(ucred + UCRED_NGROUPS, &out->ngroups,
                           sizeof(out->ngroups)) ? EFAULT : 0;
 }
@@ -507,7 +508,7 @@ static int credentials_match(pid_t pid, const struct credentials *expected,
            found.svgid == expected->svgid &&
            found.ngroups == expected->ngroups &&
            found.authid == expected->authid &&
-           found.attrs == expected->attrs &&
+           !memcmp(found.attrs, expected->attrs, sizeof(found.attrs)) &&
            !memcmp(found.caps, expected->caps, sizeof(found.caps));
 }
 
@@ -663,7 +664,9 @@ static int run_one(pid_t pid, intptr_t system_root,
     elevated.ngroups = 0;
     elevated.authid = SYSTEM_AUTHID;
     memset(elevated.caps, 0xff, sizeof(elevated.caps));
-    elevated.attrs |= UINT64_C(0x80);
+    /* The old scalar SDK API began at ucred+0x83; the array begins at
+     * ucred+0x80. Preserve every other attribute for verification/rollback. */
+    elevated.attrs[3] |= 0x80;
     cred_changed = 1;
     if ((error = set_credentials(pid, stopped.ucred, &elevated))) {
         if (set_credentials(pid, stopped.ucred, &original)) {
